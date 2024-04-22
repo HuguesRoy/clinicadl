@@ -95,7 +95,7 @@ def compute_folder_and_file_type(
     elif parameters["preprocessing"] == "pet-linear":
         mod_subfolder = "pet_linear"
         file_type = pet_linear_nii(
-            parameters["tracer"],
+            parameters["acq_label"],
             parameters["suvr_reference_region"],
             parameters["use_uncropped_image"],
         )
@@ -281,18 +281,31 @@ def extract_patch_tensor(
     """Extracts a single patch from image_tensor"""
 
     if patches_tensor is None:
-        patches_tensor = (
-            image_tensor.unfold(1, patch_size, stride_size)
-            .unfold(2, patch_size, stride_size)
+        # if it is a batch of tensor (N,C,D,H,W) (N: batch size)
+        if len(image_tensor.size()) == 5:
+             batch_size =  image_tensor.size()[0]
+             patches_tensor = (
+            image_tensor.unfold(2, patch_size, stride_size)
             .unfold(3, patch_size, stride_size)
+            .unfold(4, patch_size, stride_size)
             .contiguous()
         )
-
+             patches_tensor = patches_tensor.view(batch_size,-1, patch_size, patch_size, patch_size)
+             return patches_tensor[:,patch_index, ...].unsqueeze_(1).clone()
+        # the return is a tensor dim [ batch_size, 1, patch_size, patch_size, patch_size]
+        else:
+            patches_tensor = (
+                image_tensor.unfold(1, patch_size, stride_size)
+                .unfold(2, patch_size, stride_size)
+                .unfold(3, patch_size, stride_size)
+                .contiguous()
+            )
+            patches_tensor = patches_tensor.view(-1, patch_size, patch_size, patch_size)
+            return patches_tensor[patch_index, ...].unsqueeze_(0).clone()
         # the dimension of patches_tensor is [1, patch_num1, patch_num2, patch_num3, patch_size1, patch_size2, patch_size3]
-        patches_tensor = patches_tensor.view(-1, patch_size, patch_size, patch_size)
-
-    return patches_tensor[patch_index, ...].unsqueeze_(0).clone()
-
+    else:
+        return patches_tensor[patch_index, ...].unsqueeze_(0).clone()
+    
 
 def extract_patch_path(
     img_path: Path, patch_size: int, stride_size: int, patch_index: int

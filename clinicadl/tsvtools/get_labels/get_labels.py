@@ -102,6 +102,63 @@ def infer_or_drop_diagnosis(bids_df: pd.DataFrame) -> pd.DataFrame:
 
     return bids_copy_df
 
+def infer_or_drop_diagnosis_vec(bids_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Deduce the diagnosis when missing from previous and following sessions of the subject. If not identical, the session
+    is dropped. Sessions with no diagnosis are also dropped when there are the last sessions of the follow-up.
+
+    Parameters
+    ----------
+    bids_df: DataFrame
+        Columns including ['participant_id', 'session_id', 'diagnosis'].
+
+    Returns
+    -------
+    bids_copy_df: DataFrame
+        Cleaned copy of the input bids_df.
+    """
+    bids_df.reset_index(inplace=True)
+    #for sorting correctly
+    bids_df['session_index'] = bids_df['session_id'].str.replace('ses-M','').astype('int')
+    bids_df.set_index(["participant_id", "session_index"], inplace=True)
+    #sorting on both levels
+    bids_df.sort_index(axis=0, level = ['participant_id','session_index'],inplace=True)
+    #bool true where nan/empty val
+    check_for_nan = bids_df['diagnosis'].isnull()
+
+    #index creation
+    index_linear = pd.Index(list(range(len(bids_df))))
+    a, index_first, index_inverse = np.unique(bids_df.index.codes, return_index=True, return_inverse=True)
+    bids_df.reset_index(inplace=True)
+    diag_num, crosstable = pd.factorize(bids_df['diagnosis'])
+    bids_df['diag_num'] = diag_num
+    index_last = index_first[1:]-1
+
+    #if the last session is NaN drop:
+    to_drop = check_for_nan[index_last] == True
+    to_drop = index_last[to_drop]
+    # Index of NaN or missing value
+    index_check = index_linear[check_for_nan ]
+
+    if check_for_nan[0] == False & check_for_nan[-1] == False:
+            
+            index_consecutive = pd.Series(np.split(index_check, np.where(np.diff(index_check) != 1)[0]+1))
+            index_prev = index_consecutive.apply(min) - 1
+            index_next = index_consecutive.apply(max) + 1
+
+            cond_same_subject = index_inverse[index_prev] == index_inverse[index_next]
+            cond_same_diagnostic = bids_df.loc[index_prev,'diag_num'] == bids_df.loc[index_next,'diag_num'].values
+            cond = cond_same_subject & cond_same_diagnostic
+
+            index_to_replace = index_consecutive[cond.values]
+            change_df = pd.DataFrame({ 'index_replace' : index_to_replace,
+                                        'values_diag' :  bids_df.loc[index_prev[cond.values],'diagnosis'].values}).explode('index_replace')
+
+            bids_df.loc[change_df['index_replace'],'diagnosis'] = change_df['values_diag'].values
+            bids_df.drop(to_drop,inplace=True)
+            bids_df.drop(['session_index','diag_num'],inplace=True)
+            bids_df.set_index(["participant_id", "session_id"],inplace =True)
+    return bids_df.dropna()
 
 def mod_selection(
     bids_df: pd.DataFrame, missing_mods_dict: Dict[str, pd.DataFrame], mod: str = "t1w"
@@ -126,15 +183,17 @@ def mod_selection(
     bids_copy_df = copy(bids_df)
     nb_subjects = 0
     if mod is not None:
-        for subject, session in bids_df.index.values:
-            try:
-                mod_present = missing_mods_dict[session].loc[subject, mod]
-                if not mod_present:
-                    bids_copy_df.drop((subject, session), inplace=True)
-                    nb_subjects += 1
-            except KeyError:
-                bids_copy_df.drop((subject, session), inplace=True)
-                nb_subjects += 1
+        missing_mod_df = pd.DataFrame( {'dataframe_session': list(missing_mods_dict.values())}, index = pd.Index(list(missing_mods_dict.keys()), name ='session_id'))
+        missing_mod_df = pd.concat(list(missing_mod_df['dataframe_session']),keys= missing_mod_df.index)
+        missing_mod_df = missing_mod_df[missing_mod_df[mod] == 1]
+        # inner merge on participant_id and session_id 
+        columns_keep = bids_copy_df.columns
+        bids_copy_df.merge(missing_mod_df, on = ['participant_id','session_id'], how = 'inner')
+        bids_copy_df = bids_copy_df[columns_keep]
+
+        #number of subjects droped
+        nb_subjects = len(bids_df) - len(bids_copy_df)
+
     logger.info(f"Dropped sessions (mod selection): {nb_subjects}")
     return bids_copy_df
 
@@ -189,12 +248,12 @@ def diagnosis_removal(bids_df: pd.DataFrame, diagnosis_list: List[str]) -> pd.Da
 
     output_df = copy(bids_df)
     nb_subjects = 0
-    for subject, subject_df in bids_df.groupby(level=0):
-        for _, session in subject_df.index.values:
-            group = subject_df.loc[(subject, session), "diagnosis"]
-            if group not in diagnosis_list:
-                output_df.drop((subject, session), inplace=True)
-                nb_subjects += 1
+    mask_keep = pd.Series(np.zeros(len(bids_df['diagnosis']),dtype=bool), index = bids_df.index)
+    for diagnosis in diagnosis_list:
+        mask_keep = mask_keep + bids_df['diagnosis'].str.contains(diagnosis)
+
+    output_df = bids_df[mask_keep]
+    nb_subjects = len(bids_df) - len(output_df)
 
     logger.info(f"Dropped subjects (diagnoses): {nb_subjects}")
     return output_df
@@ -214,24 +273,28 @@ def apply_restriction(bids_df: pd.DataFrame, restriction_path: Path) -> pd.DataF
 
     Returns
     -------
-    bids_copy_df: DataFrame
+    bids_merge : DataFrame
         Cleaned copy of the input bids_df
     """
-    bids_copy_df = copy(bids_df)
     nb_subjects = 0
+    bids_merge = copy(bids_df)
     if restriction_path is not None:
         restriction_df = pd.read_csv(restriction_path, sep="\t")
 
-        for subject, session in bids_df.index.values:
-            subject_qc_df = restriction_df[
-                (restriction_df.participant_id == subject)
-                & (restriction_df.session_id == session)
-            ]
-            if len(subject_qc_df) != 1:
-                bids_copy_df.drop((subject, session), inplace=True)
-                nb_subjects += 1
+        # merge where (on) participant_id, session_id are the same (inner), more efficient
+        # use vectorization process from pandas => faster than for loop
+        columns_keep = bids_merge.columns
+        bids_merge = pd.merge(bids_merge, restriction_df,
+                               on=['participant_id','session_id'],
+                                 how='inner'
+                                 )
+        bids_merge = bids_merge[columns_keep]
+        bids_merge.set_index(["participant_id", "session_id"], inplace=True)
+        
+        nb_subjects = len(bids_df) - len(bids_merge)
+
     logger.info(f"Dropped subjects (apply restriction): {nb_subjects}")
-    return bids_copy_df
+    return bids_merge
 
 
 def get_labels(

@@ -141,3 +141,89 @@ def quality_check(
     logger.info(
         f"Quality check metrics extracted at {Path(output_tsv) / 'QC_metrics.tsv'}."
     )
+#%%
+if __name__ == "__main__":
+    caps_dir = '/network/lustre/iss02/aramis/datasets/adni/caps/caps_pet_uniform'
+    output_tsv = '/network/lustre/iss02/aramis/users/hugues.roy/Stage/UAD/GANs_based/ADNI_GAN/tsv_file/QC_pet_linear.tsv'
+    tracer = '18FFDG_rec-uniform'
+    ref_region = 'cerebellumPons2'
+    use_uncropped_image = False
+    threshold = 0.8
+    n_proc = 4,
+
+
+    home = Path.home()
+    cache_clinicadl = home / ".cache" / "clinicadl" / "mask"
+    if not cache_clinicadl.is_dir():
+        cache_clinicadl.mkdir(parents=True)
+
+    mask_contour_file = cache_clinicadl / "qc_pet_mask_contour.nii.gz"
+
+    if not (mask_contour_file).is_file():
+        try:
+            url_aramis = "https://aramislab.paris.inria.fr/files/data/masks/"
+            FILE1 = RemoteFileStructure(
+                filename="qc_pet_mask_contour.nii.gz",
+                url=url_aramis,
+                checksum="0c561ce7de343219e42861b87a359420f9d485da37a8f64d1366ee9bb5460ee6",
+            )
+            mask_contour_file = fetch_file(FILE1, cache_clinicadl)
+        except IOError as err:
+            raise IOError("Unable to download required MNI file for QC: ", err)
+
+    mask_contour_nii = nib.load(mask_contour_file)
+    mask_contour = mask_contour_nii.get_fdata()
+    mask_contour.astype(int)
+
+    nb_one_inside = np.sum(mask_contour)  # 1605780
+
+
+
+
+    sessions, subjects = get_subject_session_list(
+        caps_dir, None, False, False, None
+    )
+
+    file_type = pet_linear_nii(
+        tracer,
+        ref_region,
+        use_uncropped_image,
+    )
+
+    sessions = ['ses-M06',
+                'ses-M00',
+                'ses-M06',
+                'ses-M06',
+                'ses-M24',
+                'ses-M24',
+                'ses-M48',
+                'ses-M24',
+                'ses-M06',
+                'ses-M60']
+    # subjects = ['sub-ADNI127S0112',
+    #             'sub-ADNI109S1013',
+    #             'sub-ADNI036S0576',
+    #             'sub-ADNI036S0576',
+    #             'sub-ADNI031S0618',
+    #             'sub-ADNI094S4234',
+    #             'sub-ADNI033S1098']
+    subjects =['sub-ADNI127S0112',
+            'sub-ADNI010S4442',
+            'sub-ADNI109S1013',
+            'sub-ADNI036S0576',
+            'sub-ADNI036S0576',
+            'sub-ADNI116S4043',
+            'sub-ADNI031S0618',
+            'sub-ADNI094S4234',
+            'sub-ADNI022S0130',
+            'sub-ADNI022S0096']
+    sum_contour = []
+
+    input_files = clinica_file_reader(subjects, sessions, caps_dir, file_type)[0]
+    for filei in input_files:
+        file = Path(filei)
+        image_nii = nib.load(file)
+        image_np = image_nii.get_fdata()
+        
+        sum_contour.append(get_metric(mask_contour, image_np, nb_one_inside))
+    

@@ -66,6 +66,7 @@ class MapsManager:
         verbose: str
             Logging level ("debug", "info", "warning")
         """
+        # resolve path segments to an absolute path
         self.maps_path = maps_path.resolve()
 
         # Existing MAPS
@@ -123,7 +124,7 @@ class MapsManager:
         """
         Performs the training task for a defined list of splits
 
-        Parameters
+        Parameters 
         ----------
         split_list: List[int]
             list of splits on which the training task is performed.
