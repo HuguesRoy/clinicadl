@@ -10,7 +10,6 @@ import pandas as pd
 import torch
 import torchio as tio
 import torchvision.transforms as transforms
-from clinica.utils.exceptions import ClinicaCAPSError
 from torch.utils.data import Dataset
 
 from clinicadl.prepare_data.prepare_data_utils import (
@@ -28,6 +27,7 @@ from clinicadl.prepare_data.prepare_data_utils import (
 )
 from clinicadl.utils.exceptions import (
     ClinicaDLArgumentError,
+    ClinicaDLCAPSError,
     ClinicaDLConfigurationError,
     ClinicaDLTSVError,
 )
@@ -133,7 +133,7 @@ class CapsDataset(Dataset):
     def create_caps_dict(
         caps_directory: Path,
     ) -> Dict[str, Path]:
-        from clinica.utils.inputs import check_caps_folder
+        from clinicadl.utils.clinica_utils import check_caps_folder
 
         check_caps_folder(caps_directory)
         caps_dict = {"single": caps_directory}
@@ -149,18 +149,18 @@ class CapsDataset(Dataset):
         Returns:
             image_path: path to the tensor containing the whole image.
         """
-        from clinica.utils.inputs import clinica_file_reader
+        from clinicadl.utils.clinica_utils import clinicadl_file_reader
 
         # Try to find .nii.gz file
         try:
             file_type = self.preprocessing_dict["file_type"]
-            results = clinica_file_reader(
+            results = clinicadl_file_reader(
                 subjects=[participant],
                 sessions=[session],
                 input_directory=self.caps_directory,
                 information=file_type,
             )
-            logger.debug(f"clinica_file_reader output: {results}")
+            logger.debug(f"clinicadl_file_reader output: {results}")
             filepath = Path(results[0][0])
             image_filename = filepath.name.replace(".nii.gz", ".pt")
 
@@ -176,11 +176,11 @@ class CapsDataset(Dataset):
             )
             image_path = image_dir / image_filename
         # Try to find .pt file
-        except ClinicaCAPSError:
+        except ClinicaDLCAPSError:
             file_type = self.preprocessing_dict["file_type"]
             file_type["pattern"] = file_type["pattern"].replace(".nii.gz", ".pt")
             print(file_type)
-            results = clinica_file_reader(
+            results = clinicadl_file_reader(
                 [participant], [session], self.caps_directory, file_type
             )
             filepath = results[0]
@@ -230,7 +230,7 @@ class CapsDataset(Dataset):
             image tensor of the full image first image.
         """
         import nibabel as nib
-        from clinica.utils.inputs import clinica_file_reader
+        from clinicadl.utils.clinica_utils import clinicadl_file_reader
 
         participant_id = self.df.loc[0, "participant_id"]
         session_id = self.df.loc[0, "session_id"]
@@ -240,7 +240,7 @@ class CapsDataset(Dataset):
             image = torch.load(image_path)
         except IndexError:
             file_type = self.preprocessing_dict["file_type"]
-            results = clinica_file_reader(
+            results = clinicadl_file_reader(
                 [participant_id], [session_id], self.caps_directory, file_type
             )
             image_nii = nib.load(results[0])
@@ -287,6 +287,82 @@ class CapsDataset(Dataset):
         self.eval_mode = False
         return self
 
+class CapsDatasetSlice_hr(CapsDataset):
+    """Dataset of MRI organized in a CAPS folder."""
+
+    def __init__(
+        self,
+        caps_directory: Path,
+        tsv_label: Path,
+        preprocessing_dict: Dict[str, Any],
+        index_slices : List,
+        train_transformations: Optional[Callable] = None,
+        label_presence: bool = True,
+        label: str = None,
+        label_code: Dict[str, int] = None,
+        all_transformations: Optional[Callable] = None
+    ):
+        """
+        Args:
+            caps_directory: Directory of all the images.
+            data_file: Path to the tsv file or DataFrame containing the subject/session list.
+            preprocessing_dict: preprocessing dict contained in the JSON file of prepare_data.
+            train_transformations: Optional transform to be applied only on training mode.
+            label_presence: If True the diagnosis will be extracted from the given DataFrame.
+            label: Name of the column in data_df containing the label.
+            label_code: label code that links the output node number to label value.
+            all_transformations: Optional transform to be applied during training and evaluation.
+            multi_cohort: If True caps_directory is the path to a TSV file linking cohort names and paths.
+
+        """
+        self.n_slices = len(index_slices)
+        self.index_slices = index_slices
+        self.mode = "slice"
+        super().__init__(
+            caps_directory,
+            tsv_label,
+            preprocessing_dict,
+            augmentation_transformations=train_transformations,
+            label_presence=label_presence,
+            label=label,
+            label_code=label_code,
+            transformations=all_transformations,
+        )
+
+        self.prepare_dl = self.preprocessing_dict["prepare_dl"]
+
+    @property
+    def elem_index(self):
+        return None
+
+    def __getitem__(self, idx):
+        participant, session, elem_idx, label, domain = self._get_meta_data(idx)
+
+        image_path = self._get_image_path(participant, session)
+        image = torch.load(image_path)
+
+        if self.transformations:
+            image = self.transformations(image)
+
+        if self.augmentation_transformations and not self.eval_mode:
+            image = self.augmentation_transformations(image)
+        
+        slice_index = self.index_slices[elem_idx]
+
+        sample = {
+            "image": image[:,:,:,slice_index],
+            "label": label,
+            "participant_id": participant,
+            "session_id": session,
+            "image_id": 0,
+            "image_path": image_path.as_posix(),
+            "domain": domain,
+        }
+
+        return sample
+
+    def num_elem_per_image(self):
+        return self.n_slices
 
 class CapsDatasetImage(CapsDataset):
     """Dataset of MRI organized in a CAPS folder."""
