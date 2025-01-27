@@ -300,7 +300,8 @@ class CapsDatasetSlice_hr(CapsDataset):
         label_presence: bool = True,
         label: str = None,
         label_code: Dict[str, int] = None,
-        all_transformations: Optional[Callable] = None
+        all_transformations: Optional[Callable] = None,
+        transforms_slice = None
     ):
         """
         Args:
@@ -318,6 +319,7 @@ class CapsDatasetSlice_hr(CapsDataset):
         self.n_slices = len(index_slices)
         self.index_slices = index_slices
         self.mode = "slice"
+        self.transforms_slice = transforms_slice
         super().__init__(
             caps_directory,
             tsv_label,
@@ -328,7 +330,7 @@ class CapsDatasetSlice_hr(CapsDataset):
             label_code=label_code,
             transformations=all_transformations,
         )
-
+        
         self.prepare_dl = self.preprocessing_dict["prepare_dl"]
 
     @property
@@ -348,9 +350,13 @@ class CapsDatasetSlice_hr(CapsDataset):
             image = self.augmentation_transformations(image)
         
         slice_index = self.index_slices[elem_idx]
+        image = image[:,:,:,slice_index]
+
+        if self.transforms_slice is not None:
+            image = self.transforms_slice(image)
 
         sample = {
-            "image": image[:,:,:,slice_index],
+            "image": image ,
             "label": label,
             "participant_id": participant,
             "session_id": session,
