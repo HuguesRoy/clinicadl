@@ -45,7 +45,7 @@ class CapsDataset(Dataset):
         self,
         caps_directory: Path,
         tsv_label: Path,
-        preprocessing_dict: Dict[str, Any],
+        preprocessing_dict: Union[Path, Dict],
         transformations: Optional[Callable],
         label_presence: bool,
         label: str = None,
@@ -62,7 +62,12 @@ class CapsDataset(Dataset):
         self.label_presence = label_presence
         self.label = label
         self.label_code = label_code
-        self.preprocessing_dict = read_preprocessing(preprocessing_dict)
+
+        if isinstance(preprocessing_dict, Dict):
+            print(preprocessing_dict)
+            self.preprocessing_dict = preprocessing_dict
+        else:  # error otherwise
+            self.preprocessing_dict = read_preprocessing(preprocessing_dict)
 
         if not hasattr(self, "elem_index"):
             raise AttributeError(
@@ -230,6 +235,7 @@ class CapsDataset(Dataset):
             image tensor of the full image first image.
         """
         import nibabel as nib
+
         from clinicadl.utils.clinica_utils import clinicadl_file_reader
 
         participant_id = self.df.loc[0, "participant_id"]
@@ -287,6 +293,7 @@ class CapsDataset(Dataset):
         self.eval_mode = False
         return self
 
+
 class CapsDatasetSlice_hr(CapsDataset):
     """Dataset of MRI organized in a CAPS folder."""
 
@@ -295,13 +302,13 @@ class CapsDatasetSlice_hr(CapsDataset):
         caps_directory: Path,
         tsv_label: Path,
         preprocessing_dict: Dict[str, Any],
-        index_slices : List,
+        index_slices: List,
         train_transformations: Optional[Callable] = None,
         label_presence: bool = True,
         label: str = None,
         label_code: Dict[str, int] = None,
         all_transformations: Optional[Callable] = None,
-        transforms_slice = None
+        transforms_slice=None,
     ):
         """
         Args:
@@ -330,7 +337,7 @@ class CapsDatasetSlice_hr(CapsDataset):
             label_code=label_code,
             transformations=all_transformations,
         )
-        
+
         self.prepare_dl = self.preprocessing_dict["prepare_dl"]
 
     @property
@@ -348,15 +355,15 @@ class CapsDatasetSlice_hr(CapsDataset):
 
         if self.augmentation_transformations and not self.eval_mode:
             image = self.augmentation_transformations(image)
-        
+
         slice_index = self.index_slices[elem_idx]
-        image = image[:,:,:,slice_index]
+        image = image[:, :, :, slice_index]
 
         if self.transforms_slice is not None:
             image = self.transforms_slice(image)
 
         sample = {
-            "image": image ,
+            "image": image,
             "label": label,
             "participant_id": participant,
             "session_id": session,
@@ -369,6 +376,7 @@ class CapsDatasetSlice_hr(CapsDataset):
 
     def num_elem_per_image(self):
         return self.n_slices
+
 
 class CapsDatasetImage(CapsDataset):
     """Dataset of MRI organized in a CAPS folder."""
