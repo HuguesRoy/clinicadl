@@ -9,6 +9,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms
+from scipy.ndimage import label
 from torch.cuda.amp import autocast
 from torch.utils.data import DataLoader
 
@@ -31,6 +32,15 @@ def compute_padding(input_size: int, target_size: int) -> tuple:
         return (pad, pad + 1)
     else:
         return (pad, pad)
+
+
+def compute_unpadding(input_size: int, target_size: int) -> tuple:
+    pad = (target_size - input_size) // 2
+    if (target_size - input_size) % 2 == 1:
+        paddings = (pad, target_size - (pad + 1))
+    else:
+        paddings = (pad, target_size - pad)
+    return paddings
 
 
 class OrientationSynthStrip:
@@ -74,6 +84,9 @@ class OrientationBack:
 
 
 class Unpadd:
+    def __init__(self, orinal_image):
+        self.original_shape = orinal_image.shape
+
     def __call__(self, input_image: torch.Tensor):
         # clip to SynthStrip compatible image resolution (x64 factor)
         target_shape = tuple(
@@ -85,23 +98,21 @@ class Unpadd:
         )  # clip to min 192, 320 max size
 
         # paddind
-        pad_1 = compute_padding(input_image.shape[-1], target_shape[-1])
-        pad_2 = compute_padding(input_image.shape[-2], target_shape[-2])
-        pad_3 = compute_padding(input_image.shape[-3], target_shape[-3])
+        pad_1 = compute_unpadding(self.original_shape[-1], target_shape[-1])
+        pad_2 = compute_unpadding(self.original_shape[-2], target_shape[-2])
+        pad_3 = compute_unpadding(self.original_shape[-3], target_shape[-3])
 
-        return F.pad(input_image, (*pad_1, *pad_2, *pad_3), mode="constant", value=0)
+        return input_image[..., slice(*pad_3), slice(*pad_2), slice(*pad_1)]
 
 
-def skull_stripping_syntrip(
+def skull_stripping_synthtrip(
     caps_dir: Path,
     preprocessing_dict: Path,
-    output_path: Path,
     tsv_path: Path = None,
     batch_size: int = 1,
     n_proc: int = 0,
     gpu: bool = True,
     amp: bool = False,
-    use_tensor: bool = False,
     use_uncropped_image: bool = True,
 ):
     """
@@ -135,19 +146,21 @@ def skull_stripping_syntrip(
     home = Path.home()
 
     cache_clinicadl = Path(".")
-    url_aramis = "TODO"  # https://aramislab.paris.inria.fr/files/data/models/dl/qc/"
+    # url_aramis = "TODO"  # https://aramislab.paris.inria.fr/files/data/models/dl/qc/"
 
     cache_clinicadl.mkdir(parents=True, exist_ok=True)
 
-    FILE1 = RemoteFileStructure(
-        filename="stripmodel.pt",
-        url=url_aramis,
-        checksum=" TODO",
-    )
+    # FILE1 = RemoteFileStructure(
+    #     filename="stripmodel.pt",
+    #     url=url_aramis,
+    #     checksum=" TODO",
+    # )
 
     model = StripModel()
 
-    model_file = cache_clinicadl / FILE1.filename
+    model_file = Path(
+        "/network/iss/aramis/users/hugues.roy/clinicadl/clinicadl/skull_stripping/synthstrip_weights.pt"
+    )  # cache_clinicadl / FILE1.filename
 
     logger.info("Downloading skull stripping model.")
 
@@ -159,7 +172,8 @@ def skull_stripping_syntrip(
 
     # Load stripping model
     logger.debug("Loading SynthStrip model.")
-    model.load_state_dict(torch.load(model_file))
+    state_dict_model = torch.load(model_file)
+    model.load_state_dict(state_dict_model["model_state_dict"])
     model.eval()
     if gpu:
         logger.debug("Working on GPU.")
@@ -171,12 +185,12 @@ def skull_stripping_syntrip(
 
     with torch.no_grad():
         # Transform caps_dir in dict
-        caps_dict = CapsDataset.create_caps_dict(caps_dir, multi_cohort=False)
+        caps_dict = CapsDataset.create_caps_dict(caps_dir)
 
         # Load DataFrame
         logger.debug("Loading data to check.")
         if tsv_path is None:
-            df = load_and_check_tsv(tsv_path, caps_dict, output_path.resolve().parent)
+            df = load_and_check_tsv(tsv_path, caps_dict, caps_dir.resolve().parent)
         else:
             df = load_and_check_tsv(tsv_path, caps_dict, None)
 
@@ -189,7 +203,7 @@ def skull_stripping_syntrip(
         )
 
         dataset_synthstrip = CapsDatasetImage(
-            caps_dir, df, preprocessing_dict, transformation=transforms_synthstrip
+            caps_dir, df, preprocessing_dict, all_transformations=transforms_synthstrip
         )
 
         dataset_unorm = CapsDatasetImage(
@@ -219,8 +233,8 @@ def skull_stripping_syntrip(
         for data_synth, data_clear in zip(dataloader_synthstrip, dataloader_unstrip):
             logger.debug(f"Processing subject {data_synth['participant_id']}.")
             inputs = data_synth["image"]
+            clear_image = data_clear["image"]
 
-            clear_image = ""
             if gpu:
                 inputs = inputs.cuda()
             with autocast(enabled=amp):
@@ -231,15 +245,39 @@ def skull_stripping_syntrip(
             outputs = outputs.float()
 
             for idx, sub in enumerate(data_synth["participant_id"]):
-                image_path_i = data_synth["image_path"].parent()
+                image_path_i = Path(data_synth["image_path"][idx]).resolve().parent
                 name = (
-                    data_synth["image_path"]
+                    Path(data_synth["image_path"][idx])
                     .parts[-1]
-                    .replace(".pt", "_skull_stripped.pt")
+                    .replace("desc-Crop", "desc-Crop_desc-SkullStripped")
                 )
-                print(outputs[idx].shape)
-                torch.save(outputs[idx], image_path_i / name)
 
-                logger.debug(f" sub {sub} - session : {data_synth["session_id"]} done")
+                name_mask = (
+                    Path(data_synth["image_path"][idx])
+                    .parts[-1]
+                    .replace("T1w.pt", "dseg.pt")
+                    .replace("desc-Crop", "desc-Crop_desc-brain")
+                )
 
-        logger.info(f"Results are stored at {output_path}.")
+                back_to_norm_transform = transforms.Compose(
+                    [
+                        Unpadd(OrientationSynthStrip()(data_clear["image"][idx])),
+                        OrientationBack(),
+                    ]
+                )
+
+                mask = outputs[idx].cpu() < 1.0
+                transformed_mask = back_to_norm_transform(mask)
+                image_np, out = label(transformed_mask.numpy())
+                transformed_mask[image_np > 1] = False
+
+                skull_stripped = clear_image[idx].cpu()
+                skull_stripped[transformed_mask] = 0.0
+                torch.save(skull_stripped, image_path_i / name)
+                torch.save(transformed_mask, image_path_i / name_mask)
+
+                logger.debug(
+                    f" sub {sub} - session : {data_synth['session_id'][idx]} done"
+                )
+
+        logger.info(f"Results are stored at {caps_dir}.")

@@ -30,16 +30,17 @@ def synstrip_cli(
 
     CAPS_DIRECTORY is the CAPS folder where t1-linear outputs are stored.
 
-    OUTPUT_TSV is the path to the tsv file where results will be saved.
+    PREPROCESSING DICT is the preprocessing dict from clinicadl extract tensor
+
     """
     from clinicadl.utils.cmdline_utils import check_gpu
 
     if gpu:
         check_gpu()
 
-    from .skull_stripping import skull_stripping_synstrip
+    from .skull_stripping import skull_stripping_synthtrip
 
-    skull_stripping_synstrip(
+    skull_stripping_synthtrip(
         caps_directory,
         preprocessing_dict,
         tsv_path=participants_tsv,
