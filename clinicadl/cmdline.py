@@ -11,6 +11,7 @@ from clinicadl.prepare_data.prepare_data_from_bids_cli import (
 )
 from clinicadl.quality_check.qc_cli import cli as qc_cli
 from clinicadl.random_search.random_search_cli import cli as random_search_cli
+from clinicadl.skull_stripping.skull_strip_cli import cli as skull_cli
 from clinicadl.train.train_cli import cli as train_cli
 from clinicadl.tsvtools.cli import cli as tsvtools_cli
 from clinicadl.utils.logger import setup_logging
@@ -47,6 +48,7 @@ cli.add_command(interpret_cli)
 cli.add_command(qc_cli)
 cli.add_command(random_search_cli)
 cli.add_command(hf_cli)
+cli.add_command(skull_cli)
 
 if __name__ == "__main__":
     cli()

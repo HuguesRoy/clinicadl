@@ -230,12 +230,16 @@ def skull_stripping_syntrip(
             # But just in case...
             outputs = outputs.float()
 
-            for idx, sub in enumerate(data["participant_id"]):
-                image_path_i = data["image_path"].parent()
-                name = data["image_path"].parts[-1].replace(".pt", "_skull_stripped.pt")
+            for idx, sub in enumerate(data_synth["participant_id"]):
+                image_path_i = data_synth["image_path"].parent()
+                name = (
+                    data_synth["image_path"]
+                    .parts[-1]
+                    .replace(".pt", "_skull_stripped.pt")
+                )
                 print(outputs[idx].shape)
                 torch.save(outputs[idx], image_path_i / name)
 
-                logger.debug(f" sub {sub} - session : {data["session_id"]} done")
+                logger.debug(f" sub {sub} - session : {data_synth["session_id"]} done")
 
         logger.info(f"Results are stored at {output_path}.")
