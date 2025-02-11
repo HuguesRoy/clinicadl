@@ -122,19 +122,15 @@ def skull_stripping_synthtrip(
     -----------
     caps_dir: str (Path)
         Path to the input caps directory
-    output_path: str (Path)
-        Path to the output TSV file.
+    preprocessing_dict : str (Path)
+        Path to the preprocessing json (output of tensor extraction)
     tsv_path: str (Path)
         Path to the participant.tsv if the option was added.
-    threshold: float
-        Threshold that indicates whether the image passes the quality check.
     batch_size: int
     n_proc: int
     gpu: int
     amp: bool
         If enabled, uses Automatic Mixed Precision (requires GPU usage).
-    use_tensor: bool
-        To use tensor instead of nifti images
     use_uncropped_image: bool
         To use uncropped images instead of the cropped ones.
 
@@ -144,23 +140,21 @@ def skull_stripping_synthtrip(
 
     # Fetch SynStrip model
     home = Path.home()
-
-    cache_clinicadl = Path(".")
-    # url_aramis = "TODO"  # https://aramislab.paris.inria.fr/files/data/models/dl/qc/"
+    print(home)
+    cache_clinicadl = home / ".cache" / "clinicadl" / "models"
+    url_model = "https://surfer.nmr.mgh.harvard.edu/docs/synthstrip/requirements/"  # https://aramislab.paris.inria.fr/files/data/models/dl/qc/"
 
     cache_clinicadl.mkdir(parents=True, exist_ok=True)
 
-    # FILE1 = RemoteFileStructure(
-    #     filename="stripmodel.pt",
-    #     url=url_aramis,
-    #     checksum=" TODO",
-    # )
+    FILE1 = RemoteFileStructure(
+        filename="synthstrip.1.pt",
+        url=url_model,
+        checksum="37417f802196186441aae3e7f385d94f8a98c64a88acaeaa2723af995c653e33",
+    )
 
     model = StripModel()
 
-    model_file = Path(
-        "/network/iss/aramis/users/hugues.roy/clinicadl/clinicadl/skull_stripping/synthstrip_weights.pt"
-    )  # cache_clinicadl / FILE1.filename
+    model_file = cache_clinicadl / FILE1.filename
 
     logger.info("Downloading skull stripping model.")
 
