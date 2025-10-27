@@ -404,7 +404,9 @@ def insensitive_glob(pattern_glob: str, recursive: Optional[bool] = False) -> Li
     def make_case_insensitive_pattern(c: str) -> str:
         return "[%s%s]" % (c.lower(), c.upper()) if c.isalpha() else c
 
-    insensitive_pattern = "".join(map(make_case_insensitive_pattern, pattern_glob))
+    # Remove call to make_case_insensitive_pattern for Jean Zay
+    # insensitive_pattern = "".join(map(make_case_insensitive_pattern, pattern_glob))
+    insensitive_pattern = pattern_glob
     return glob(insensitive_pattern, recursive=recursive)
 
 

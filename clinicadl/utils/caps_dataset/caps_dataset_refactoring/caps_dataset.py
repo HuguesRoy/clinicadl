@@ -5,6 +5,7 @@ from logging import getLogger
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import nibabel as nib
 import numpy as np
 import pandas as pd
 import torch
@@ -51,6 +52,7 @@ class CapsDataset(Dataset):
         label: str = None,
         label_code: Dict[Any, int] = None,
         augmentation_transformations: Optional[Callable] = None,
+        nifti: bool = False,
     ):
         from clinicadl.utils.preprocessing import read_preprocessing
 
@@ -63,6 +65,7 @@ class CapsDataset(Dataset):
         self.label = label
         self.label_code = label_code
         self.preprocessing_dict = read_preprocessing(preprocessing_dict)
+        self.nifti = nifti
 
         if not hasattr(self, "elem_index"):
             raise AttributeError(
@@ -165,18 +168,26 @@ class CapsDataset(Dataset):
             )
             logger.debug(f"clinicadl_file_reader output: {results}")
             filepath = Path(results[0][0])
-            image_filename = filepath.name.replace(".nii.gz", ".pt")
+            if self.nifti:
+                image_filename = filepath.name
+            else:
+                image_filename = filepath.name.replace(".nii.gz", ".pt")
 
             folder, _ = compute_folder_and_file_type(self.preprocessing_dict)
-            image_dir = (
-                self.caps_directory
-                / "subjects"
-                / participant
-                / session
-                / "deeplearning_prepare_data"
-                / "image_based"
-                / folder
-            )
+            if self.nifti:
+                image_dir = (
+                    self.caps_directory / "subjects" / participant / session / folder
+                )
+            else:
+                image_dir = (
+                    self.caps_directory
+                    / "subjects"
+                    / participant
+                    / session
+                    / "deeplearning_prepare_data"
+                    / "image_based"
+                    / folder
+                )
             image_path = image_dir / image_filename
         # Try to find .pt file
         except ClinicaDLCAPSError:
@@ -362,7 +373,7 @@ class CapsDatasetSlice_hr(CapsDataset):
 
         sample = {
             "image": image,
-            "slice_index" : slice_index,
+            "slice_index": slice_index,
             "label": label,
             "participant_id": participant,
             "session_id": session,
@@ -390,6 +401,7 @@ class CapsDatasetImage(CapsDataset):
         label: str = None,
         label_code: Dict[str, int] = None,
         all_transformations: Optional[Callable] = None,
+        nifti: bool = False,
     ):
         """
         Args:
@@ -402,6 +414,7 @@ class CapsDatasetImage(CapsDataset):
             label_code: label code that links the output node number to label value.
             all_transformations: Optional transform to be applied during training and evaluation.
             multi_cohort: If True caps_directory is the path to a TSV file linking cohort names and paths.
+            nifti: If True load nifti files instead of pt files.
 
         """
 
@@ -415,6 +428,7 @@ class CapsDatasetImage(CapsDataset):
             label=label,
             label_code=label_code,
             transformations=all_transformations,
+            nifti=nifti,
         )
 
         self.prepare_dl = self.preprocessing_dict["prepare_dl"]
@@ -427,7 +441,13 @@ class CapsDatasetImage(CapsDataset):
         participant, session, _, label, domain = self._get_meta_data(idx)
 
         image_path = self._get_image_path(participant, session)
-        image = torch.load(image_path)
+
+        if not self.nifti:
+            image = torch.load(image_path)
+        else:
+            image = torch.tensor(
+                nib.load(image_path).get_fdata(dtype=np.float32)
+            ).unsqueeze(0)
 
         if self.transformations:
             image = self.transformations(image)

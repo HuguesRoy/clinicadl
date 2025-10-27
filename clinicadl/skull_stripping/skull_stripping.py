@@ -5,16 +5,19 @@ This file contains all methods needed to perform the quality check procedure aft
 from logging import getLogger
 from pathlib import Path
 
+import nibabel as nib
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from scipy.ndimage import label
-import numpy as np
 from torch.cuda.amp import autocast
 from torch.utils.data import DataLoader
 
 from clinicadl.generate.generate_utils import load_and_check_tsv
+from clinicadl.skull_stripping.models import StripModel
+from clinicadl.skull_stripping.utils import make_derivative_names
 from clinicadl.utils.caps_dataset.caps_dataset_refactoring.caps_dataset import (
     CapsDataset,
     CapsDatasetImage,
@@ -22,8 +25,6 @@ from clinicadl.utils.caps_dataset.caps_dataset_refactoring.caps_dataset import (
 from clinicadl.utils.clinica_utils import RemoteFileStructure, fetch_file
 from clinicadl.utils.exceptions import ClinicaDLArgumentError
 
-from .models import StripModel
-from .utils import make_derivative_names
 logger = getLogger("clinicadl.quality-check")
 
 
@@ -106,7 +107,7 @@ class Unpadd:
         return input_image[..., slice(*pad_3), slice(*pad_2), slice(*pad_1)]
 
 
-def skull_stripping_synthtrip(
+def skull_stripping_synthstrip(
     caps_dir: Path,
     preprocessing_dict: Path,
     tsv_path: Path = None,
@@ -115,6 +116,7 @@ def skull_stripping_synthtrip(
     gpu: bool = True,
     amp: bool = False,
     use_uncropped_image: bool = True,
+    nifti: bool = False,
 ):
     """
     Performs MR image skull stripping on caps dataset using SynthStrip model
@@ -134,6 +136,8 @@ def skull_stripping_synthtrip(
         If enabled, uses Automatic Mixed Precision (requires GPU usage).
     use_uncropped_image: bool
         To use uncropped images instead of the cropped ones.
+    nifti: bool (default = False)
+        To read inputs and save outputs as nifti files instead of pytorch tensors.
 
     """
 
@@ -167,7 +171,9 @@ def skull_stripping_synthtrip(
 
     # Load stripping model
     logger.debug("Loading SynthStrip model.")
-    state_dict_model = torch.load(model_file)
+    state_dict_model = torch.load(
+        model_file, map_location=torch.device("cuda" if gpu else "cpu")
+    )
     model.load_state_dict(state_dict_model["model_state_dict"])
     model.eval()
     if gpu:
@@ -198,13 +204,18 @@ def skull_stripping_synthtrip(
         )
 
         dataset_synthstrip = CapsDatasetImage(
-            caps_dir, df, preprocessing_dict, all_transformations=transforms_synthstrip
+            caps_dir,
+            df,
+            preprocessing_dict,
+            all_transformations=transforms_synthstrip,
+            nifti=nifti,
         )
 
         dataset_unorm = CapsDatasetImage(
             caps_dir,
             df,
             preprocessing_dict,
+            nifti=nifti,
         )
 
         dataloader_synthstrip = DataLoader(
@@ -244,7 +255,10 @@ def skull_stripping_synthtrip(
             for idx, sub in enumerate(data_synth["participant_id"]):
                 image_path_i = Path(data_synth["image_path"][idx]).resolve().parent
 
-                name, name_mask = make_derivative_names(Path(data_synth["image_path"][idx]), use_uncropped_image = use_uncropped_image)
+                name, name_mask = make_derivative_names(
+                    Path(data_synth["image_path"][idx]),
+                    use_uncropped_image=use_uncropped_image,
+                )
 
                 back_to_norm_transform = transforms.Compose(
                     [
@@ -256,36 +270,54 @@ def skull_stripping_synthtrip(
                 mask = outputs[idx].cpu() < 1.0
                 transformed_mask = back_to_norm_transform(mask)
                 image_np, out = label(transformed_mask.numpy())
-                unique, counts = np.unique(image_np[image_np>0], return_counts=True)
-                
-                if (counts is None ) or (len(counts) == 0):
+                unique, counts = np.unique(image_np[image_np > 0], return_counts=True)
+
+                if (counts is None) or (len(counts) == 0):
                     logger.info(
-                    f" sub {sub} - session : {data_synth['session_id'][idx]} - problem encoutered"
+                        f" sub {sub} - session : {data_synth['session_id'][idx]} - problem encoutered"
                     )
                     continue
                 transformed_mask[image_np > unique[np.argmax(counts)]] = False
 
                 skull_stripped = clear_image[idx].cpu()
                 skull_stripped[~transformed_mask] = skull_stripped.min()
-                torch.save(skull_stripped, image_path_i / name)
-                torch.save(transformed_mask.cpu(), image_path_i / name_mask)
+
+                if not nifti:
+                    torch.save(skull_stripped, image_path_i / name)
+                    torch.save(transformed_mask.cpu(), image_path_i / name_mask)
+
+                else:
+                    skull_stripped_nib = nib.Nifti1Image(
+                        skull_stripped[0].numpy(), np.eye(4)
+                    )
+                    nib.save(skull_stripped_nib, image_path_i / name)
+
+                    transformed_mask_nib = nib.Nifti1Image(
+                        transformed_mask[0].numpy().astype(np.uint8), np.eye(4)
+                    )
+                    nib.save(
+                        transformed_mask_nib,
+                        image_path_i / name_mask,
+                    )
 
                 logger.info(
                     f" sub {sub} - session : {data_synth['session_id'][idx]} done"
                 )
-                
-                success_list.append({
-                    "participant_id": sub,
-                    "session_id": data_synth["session_id"][idx],
-                    "image_path": str(image_path_i / name),
-                    "mask_path": str(image_path_i / name_mask)
-                })
-        
+
+                success_list.append(
+                    {
+                        "participant_id": sub,
+                        "session_id": data_synth["session_id"][idx],
+                        "image_path": str(image_path_i / name),
+                        "mask_path": str(image_path_i / name_mask),
+                    }
+                )
+
         # save success log
         if len(success_list) > 0:
             success_df = pd.DataFrame(success_list)
             out_tsv = caps_dir / "skull_stripping_success.tsv"
             success_df.to_csv(out_tsv, sep="\t", index=False)
             logger.info(f"Saved success log at {out_tsv}")
-        
+
         logger.info(f"Results are stored at {caps_dir}.")

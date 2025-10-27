@@ -17,6 +17,13 @@ from clinicadl.utils import cli_param
 @cli_param.option.use_gpu
 @cli_param.option.amp
 @cli_param.option.use_uncropped_image
+@click.option(
+    "nifti",
+    "--nifti",
+    is_flag=True,
+    default=False,
+    help="If flagged, use nifti files instead of pytorch tensors.",
+)
 def synstrip_cli(
     caps_directory,
     preprocessing_dict,
@@ -26,12 +33,13 @@ def synstrip_cli(
     gpu,
     amp,
     use_uncropped_image,
+    nifti,
 ):
-    """Performs quality check on t1-linear pipeline.
+    """Performs skull stripping.
 
-    CAPS_DIRECTORY is the CAPS folder where t1-linear outputs are stored.
+    caps_directory is the CAPS folder where t1-linear outputs are stored
 
-    PREPROCESSING DICT is the preprocessing dict from clinicadl extract tensor
+    preprocessing_dict is the preprocessing dict from clinicadl extract tensor
 
     """
     from clinicadl.utils.cmdline_utils import check_gpu
@@ -39,9 +47,9 @@ def synstrip_cli(
     if gpu:
         check_gpu()
 
-    from .skull_stripping import skull_stripping_synthtrip
+    from clinicadl.skull_stripping.skull_stripping import skull_stripping_synthstrip
 
-    skull_stripping_synthtrip(
+    skull_stripping_synthstrip(
         caps_directory,
         preprocessing_dict,
         tsv_path=participants_tsv,
@@ -50,6 +58,7 @@ def synstrip_cli(
         gpu=gpu,
         amp=amp,
         use_uncropped_image=use_uncropped_image,
+        nifti=nifti,
     )
 
 
