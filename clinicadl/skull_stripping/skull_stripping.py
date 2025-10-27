@@ -287,13 +287,20 @@ def skull_stripping_synthstrip(
                     torch.save(transformed_mask.cpu(), image_path_i / name_mask)
 
                 else:
+                    
+                    header_original_image = nib.load(data_synth["image_path"][idx]).header.copy()
+    
                     skull_stripped_nib = nib.Nifti1Image(
-                        skull_stripped[0].numpy(), np.eye(4)
+                        skull_stripped[0].numpy(),
+                        None,
+                        header=header_original_image
                     )
                     nib.save(skull_stripped_nib, image_path_i / name)
 
                     transformed_mask_nib = nib.Nifti1Image(
-                        transformed_mask[0].numpy().astype(np.uint8), np.eye(4)
+                        transformed_mask[0].numpy().astype(np.uint8),
+                        None,
+                        header=header_original_image,
                     )
                     nib.save(
                         transformed_mask_nib,
